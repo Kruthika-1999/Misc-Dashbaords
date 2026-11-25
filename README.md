@@ -1,10 +1,13 @@
 # TransAxle Learning & Development Dashboard
 
-A single-file, offline web dashboard (`index_v.1.0.html`) that reads the team learning tracker Excel workbook and shows learning hours, target achievement, readiness programmes, person-to-person comparisons and a yearly training timeline.
+A single-file web dashboard (`index_v.1.0.html`) that reads an uploaded team learning tracker Excel workbook and shows learning hours, target achievement, readiness programmes, person-to-person comparisons and a yearly training timeline. It is designed to be hosted as a static page (for example **GitHub Pages**) with **no server**.
 
-- **Single file:** all HTML, CSS and JavaScript are inside `index_v.1.0.html`. No libraries, no internet, no database.
-- **No hard-coded data:** every name, year, method, training and number shown comes from the workbook at load time.
-- **Read-only:** the dashboard never modifies, locks or saves the workbook.
+- **Single file:** all HTML, CSS and JavaScript are inside `index_v.1.0.html`. No libraries, no server, no database.
+- **Upload, don't link:** the user uploads the workbook; no file name or path is hard-coded.
+- **Kept for the tab only:** the uploaded workbook survives page reloads in the same tab and is **deleted automatically when the tab is closed** (`sessionStorage`).
+- **Private:** the workbook is read inside the browser and never sent anywhere.
+- **No hard-coded data:** every name, year, method, training and number shown comes from the workbook.
+- **Read-only:** the dashboard never modifies the workbook.
 
 ---
 
@@ -25,46 +28,62 @@ A single-file, offline web dashboard (`index_v.1.0.html`) that reads the team le
 
 | File | Purpose |
 |---|---|
-| `index_v.1.0.html` | The dashboard (open in a browser) |
-| `Powertrain engineering Learning Tracker_V2_20261120_k18.1.xlsx` | The data source (the "backend" workbook) |
-| `DASHBOARD_README.md` | This document |
+| `index_v.1.0.html` | The dashboard. For GitHub Pages, publish it as `index.html` (or link to it). |
+| Any `.xlsx` learning tracker in the required format | Uploaded by the user. **File name and location do not matter.** Not stored in the repository. |
+| `DT-LD-Dashbaord_README.md` | This document |
 
 ---
 
 ## 3. Quick start
 
-### Option A — automatic loading (recommended)
+### Hosting on GitHub Pages
 
-1. Put `index_v.1.0.html` in the **same folder** as the workbook.
-2. Open a terminal in that folder and run:
-   ```
-   python -m http.server 8000
-   ```
-3. Open <http://127.0.0.1:8000/index_v.1.0.html>.
-4. After editing and saving the workbook, click **Refresh data**. No restart is needed.
+1. Commit `index_v.1.0.html` to the repository (rename to `index.html` if it should be the site's home page).
+2. Enable **Settings → Pages** for the branch.
+3. Open the site URL. **Do not commit the workbook** — each user uploads it in the browser.
 
-### Option B — open the file directly
+### Using the dashboard
 
-1. Double-click `index_v.1.0.html`.
-2. Browsers do not allow a page opened from disk to read other files, so the page shows a message. Click **Select workbook…** and choose the `.xlsx` file.
-3. In Edge/Chrome, **Refresh data** re-reads the same file after you save it. In other browsers, select the file again after each save.
+1. Open the page. A welcome screen appears.
+2. Click **Upload workbook…** (or drag and drop the `.xlsx` anywhere on the page).
+3. The dashboard loads. Reloading the page in the **same tab** keeps it; **closing the tab deletes it** automatically.
+4. To update: edit the workbook in Excel, save, then **Upload workbook…** again (or drag it in). In Edge/Chrome, **Refresh data** can re-read the same file directly after asking for permission.
+
+### Where the data comes from
+
+```mermaid
+flowchart TD
+    A([Page opens / Refresh data]) --> B{File uploaded or dropped<br/>in this tab?}
+    B -- Yes --> R{Can the browser<br/>re-read it?}
+    R -- Yes --> L[Read the file]
+    R -- No --> C
+    B -- No --> C{Copy kept<br/>for this tab?}
+    C -- Yes --> S[Use the tab copy]
+    C -- No --> W[Welcome screen:<br/>Upload workbook / drag & drop]
+    L --> V{Required sheets and<br/>headers present?}
+    S --> V
+    V -- Yes --> D[Dashboard]
+    L -- valid --> K[(Keep copy for this tab<br/>sessionStorage)]
+    K -. tab closed .-> X[Deleted by the browser]
+    V -- No --> E[Error naming what is missing] --> W
+```
 
 ---
 
 ## 4. Configuration
 
-All settings are in one block at the top of the `<script>` in `index_v.1.0.html`.
+All settings are in the `CONFIG` block at the top of the `<script>` in `index_v.1.0.html`. There is **no file path or file-name setting**; the workbook is always uploaded.
 
-### 4.1 `BACKEND_WORKBOOK_PATH`
+### 4.1 Tab storage
 
-```js
-const BACKEND_WORKBOOK_PATH = String.raw`C:\...\Powertrain engineering Learning Tracker_V2_20261120_k18.1.xlsx`;
-```
-
-- This is the **only** place the workbook path is defined.
-- When served over http (Option A), the page loads the file **with the same name next to the HTML**. A browser cannot read an absolute `C:\` path, so only the file name part is used.
-- A relative path (for example `data/tracker.xlsx`) is also accepted when served over http.
-- The value is shown in the error panel so users know which file is expected.
+| Item | Detail |
+|---|---|
+| Where | The browser's `sessionStorage` for this site, in **this tab only** |
+| What | The last **valid** uploaded workbook (name, modified time and file contents) |
+| Lifetime | Survives reloads and **Refresh data** in the same tab; **removed automatically when the tab or browser is closed** |
+| Sharing | Not shared between tabs, users, browsers or devices; a new tab starts at the welcome screen |
+| Size | Fits workbooks up to roughly 3 MB; larger files still work but must be uploaded again after a reload (a notice says so) |
+| Older data | Any workbook saved by an earlier version of the page (IndexedDB) is deleted on load |
 
 ### 4.2 `CONFIG` (layout and rules)
 
@@ -180,6 +199,9 @@ flowchart TD
 | 12 | KPI and summary totals include **only people in the `Employees` sheet** | Others are shown in Compare ("Main sheet only"), timeline and Data quality |
 | 13 | Totals are calculated from individual cells | May differ from Excel's cached `TOTAL` cells if those are hard-coded or stale |
 | 14 | Saving the workbook while the dashboard reads it | Read may fail; click **Refresh data** again |
+| 15 | File name and location are **not** restricted | Any `.xlsx` loads if the format matches |
+| 16 | Only the **last valid** workbook is kept, per tab | Uploading a new valid workbook replaces it; invalid uploads are not kept |
+| 17 | The workbook is kept only while the tab is open | Closing the tab deletes it; upload again in a new tab |
 
 ---
 
@@ -191,9 +213,10 @@ flowchart LR
         X[(Workbook .xlsx)]
     end
     subgraph Load["Load (every page load / Refresh)"]
-        L1{Opened over http?}
-        L2[fetch same-named file<br/>no cache]
-        L3[Select workbook…<br/>file picker]
+        L1{File uploaded / dropped<br/>this session?}
+        L2[Read uploaded file]
+        L3[(Copy kept for this tab<br/>sessionStorage)]
+        L4[Welcome screen]
     end
     subgraph Parse["Parse (in the browser, read-only)"]
         P1[Unzip .xlsx]
@@ -211,9 +234,12 @@ flowchart LR
     end
     X --> L1
     L1 -- Yes --> L2 --> P1
-    L1 -- No --> L3 --> P1
+    L1 -- No --> L3
+    L3 -- tab copy --> P1
+    L3 -- nothing saved --> L4 --> L2
+    P5 -. valid upload .-> L3
     P1 --> P2 --> P3
-    P3 -- Missing sheet/header --> E[Error panel<br/>with expected path]
+    P3 -- Missing sheet/header --> E[Error panel<br/>+ welcome screen]
     P3 -- OK --> P4 --> P5
     P4 --> S1 & S2 & S3
     S1 & S3 -- click a bar/card --> S4
@@ -226,7 +252,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     A([Open dashboard]) --> B{Workbook loaded?}
-    B -- No --> C[Error panel] --> D[Select workbook… / fix file] --> B
+    B -- No --> C[Welcome screen] --> D[Upload workbook /<br/>drag & drop] --> B
     B -- Yes --> E[Choose Year<br/>or All Years]
     E --> F[Review Learning summary<br/>KPIs + charts]
     F --> G{Need detail?}
@@ -245,7 +271,9 @@ flowchart TD
 ## 9. Dashboard sections
 
 ### 9.1 Header
-Workbook name, last modified time, last refresh time, selected year, learning target, **Year** filter, **Refresh data**, **Select workbook…**
+Workbook name, last modified time, last refresh time, selected year, learning target, **Year** filter, **Refresh data**, **Upload workbook…**
+
+Before a workbook is loaded, a **welcome screen** shows the drop area, the **Upload workbook…** button, a privacy note and the required-format checklist (generated from `CONFIG`). An amber notice appears only when something needs attention (for example the original file could not be re-read).
 
 ### 9.2 Learning summary (team = `Employees` sheet)
 
@@ -328,15 +356,17 @@ Animations are switched off automatically when the operating system's "reduce mo
 
 | Message / symptom | Cause | Fix |
 |---|---|---|
-| "This page was opened directly from disk…" | Browser security on `file://` | Use **Select workbook…** or Option A (http server) |
-| "Workbook not found next to this page" | File name differs or file is in another folder | Put the workbook beside the HTML or update `BACKEND_WORKBOOK_PATH` |
+| Welcome screen instead of the dashboard | Nothing uploaded in this tab yet (new tab, tab was closed, other device) | **Upload workbook…** or drag and drop |
+| "… was renamed, moved or deleted" / "did not allow re-reading" | The original file can't be re-read | The copy uploaded earlier in this tab is shown; upload the workbook again to update |
+| "This browser blocked direct access to …" | Browser limits direct file access (e.g. VS Code's built-in browser) | Click **Upload workbook…** again — the standard file chooser is used |
+| "… is too large to keep for this tab" | Workbook exceeds the tab storage limit | The dashboard still works; upload again after reloading |
+| "… is not an .xlsx workbook" | A `.csv`, `.xls` or other file was chosen | Save from Excel as **Excel Workbook (*.xlsx)** |
 | "Worksheet … was not found" | Sheet renamed | Restore the exact sheet name or update `CONFIG` |
 | "Missing expected header(s)…" | Header text changed or moved | Restore header text in row 3 (columns A–H) |
-| "not a valid .xlsx workbook" / "corrupt" | Wrong format, still saving, or damaged | Save as `.xlsx`, wait for Excel to finish saving, then **Refresh data** |
-| "The browser no longer allows reading the selected workbook" | File permission expired | Click **Select workbook…** again |
+| "not a valid .xlsx workbook" / "corrupt" | Still saving, or damaged | Wait for Excel to finish saving, then **Refresh data** |
 | A person is missing from KPIs | Not in the `Employees` sheet | Add the name to row 2 of `Employees` |
 | Total differs from Excel's TOTAL column | Excel total cell is hard-coded/stale | Dashboard uses individual cells; fix the Excel formula |
-| Numbers didn't change after editing | Workbook not saved, or page not refreshed | Save in Excel, then **Refresh data** |
+| Numbers didn't change after editing | The tab still holds the old copy | Save in Excel, then **Upload workbook…** again (or **Refresh data** in Edge/Chrome) |
 
 ---
 
@@ -348,6 +378,8 @@ Animations are switched off automatically when the operating system's "reduce mo
 - [ ] Year filter changes KPIs, charts, Compare and timeline.
 - [ ] Clicking a name in "Learning hours by employee" adds it to Compare; clicking again removes it.
 - [ ] Totals of 0 h are grey, < 40 h red, ≥ 40 h coloured.
-- [ ] Edit an hour in Excel → Save → **Refresh data** → value updates.
-- [ ] Rename the workbook → a readable error appears.
+- [ ] Edit an hour in Excel → Save → **Upload workbook…** → value updates.
+- [ ] Upload a workbook with any file name from any folder → dashboard loads with the same figures.
+- [ ] Reload the page in the same tab → the workbook loads automatically.
+- [ ] Close the tab and open the site in a new tab → welcome screen (data cleared).
 - [ ] The workbook's modified time is unchanged after using the dashboard.

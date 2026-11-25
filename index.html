@@ -83,6 +83,21 @@
   .error { border-left: 5px solid var(--red); }
   .error h2 { margin-top: 0; font-size: 1.1rem; }
   .error code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  .err-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 10px 0; }
+  .notice { border-left: 5px solid #f59e0b; background: #fffbeb; font-size: .9rem; overflow-wrap: anywhere; }
+  .welcome { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 20px; }
+  .drop { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: clamp(18px, 4vw, 36px); text-align: center;
+    border: 2px dashed #99f6e4; border-radius: 14px; background: linear-gradient(180deg, #f0fdfa, #fff); }
+  .drop svg { width: 48px; height: 48px; color: var(--teal); animation: bob 2.4s ease-in-out infinite; }
+  .drop h2 { margin: 4px 0 0; font-size: 1.15rem; }
+  .drop .err-actions { justify-content: center; }
+  .checklist { min-width: 0; }
+  .checklist h3 { margin: 0 0 8px; font-size: .95rem; }
+  .checklist ul { margin: 0; padding-left: 18px; display: grid; gap: 7px; font-size: .86rem; color: #334155; overflow-wrap: anywhere; }
+  .checklist code { background: #f1f5f9; padding: 0 4px; border-radius: 4px; }
+  body.dropping::after { content: "Drop the .xlsx workbook to load it"; position: fixed; inset: 12px; z-index: 1200; display: grid; place-items: center;
+    border: 3px dashed var(--teal); border-radius: 16px; background: rgba(240, 253, 250, .92); color: #0f766e; font-size: 1.2rem; font-weight: 600; pointer-events: none; }
+  @keyframes bob { 50% { transform: translateY(-4px); } }
   .empty { color: var(--muted); font-style: italic; margin: 8px 0; }
 
   /* KPIs */
@@ -276,7 +291,7 @@
       <div class="toolbar">
         <label for="yearSel">Year <select id="yearSel"><option value="__all__">All Years</option></select></label><span data-help="year"></span>
         <button id="refreshBtn" type="button">Refresh data</button>
-        <button id="pickBtn" type="button" class="light">Select workbook…</button>
+        <button id="pickBtn" type="button" class="light">Upload workbook…</button>
         <input id="fileInput" type="file" accept=".xlsx" hidden>
       </div>
     </div>
@@ -287,6 +302,22 @@
 <main class="wrap">
   <div id="skeleton" class="skeleton" aria-hidden="true"><div class="sk"></div><div class="sk tall"></div><div class="sk tall"></div></div>
   <section id="errorBox" class="card error" role="alert" hidden></section>
+  <section id="noticeBox" class="card notice" role="status" hidden></section>
+  <section id="welcome" class="card welcome" hidden>
+    <div class="drop">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M20 16v3a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-3"/></svg>
+      <h2>Upload the learning tracker workbook</h2>
+      <p class="hint">Drag and drop an .xlsx file anywhere on this page, or choose one. Any file name works as long as the format matches.</p>
+      <div class="err-actions">
+        <button id="welcomePick" type="button">Upload workbook…</button>
+      </div>
+      <p class="hint">The file is read inside your browser and kept only while this tab is open. Nothing is sent to any server.</p>
+    </div>
+    <div class="checklist">
+      <h3>Required workbook format</h3>
+      <ul id="formatList"></ul>
+    </div>
+  </section>
 
   <div id="content" hidden>
     <section class="card" aria-labelledby="kpiTitle">
@@ -370,10 +401,6 @@
 "use strict";
 
 /* ================= CONFIGURATION ================= */
-// Browsers cannot read a C:\ path directly: when served over http the page loads the same-named file
-// next to this HTML; when opened from disk use "Select workbook…".
-const BACKEND_WORKBOOK_PATH = String.raw`C:\Users\AKRUTHI\Downloads\copilot_dashboard\Powertrain engineering Learning Tracker_V2_20261120_k18.1.xlsx`;
-
 const CONFIG = {
   mainSheet: "Efficiency measures _Summary",
   trainingListSheet: "Sheet1",
@@ -674,40 +701,71 @@ const state = {
 };
 function newRow() { return { p: "", method: ALL, training: ALL, subTopic: ALL, hours: ALL }; }
 
-function workbookUrl() {
-  const p = BACKEND_WORKBOOK_PATH.trim().replace(/\\/g, "/");
-  const isAbsolute = /^[a-zA-Z]:\//.test(p) || p.startsWith("//");
-  const rel = isAbsolute ? p.split("/").pop() : p;
-  return new URL(rel.split("/").map(encodeURIComponent).join("/"), location.href).href;
+const isWorkbookName = name => /\.xlsx$/i.test(name) && !name.startsWith("~$");
+
+/* ---------- Tab storage: sessionStorage survives reloads but is cleared by the browser when the tab closes ---------- */
+const SESSION_KEY = "transaxle-ld-workbook";
+function toBase64(buf) {
+  const u8 = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function fromBase64(b64) {
+  const s = atob(b64), u8 = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+  return u8.buffer;
+}
+function sessionSave(name, modified, buf) {
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ name, modified: modified.getTime(), data: toBase64(buf) })); return true; }
+  catch { sessionStorage.removeItem(SESSION_KEY); return false; }
+}
+function sessionLoad() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+    return saved && { name: saved.name, modified: new Date(saved.modified), buf: fromBase64(saved.data) };
+  } catch { return null; }
 }
 
+async function fileResult(f) { return { buf: await f.arrayBuffer(), name: f.name, modified: new Date(f.lastModified) }; }
+
+// Some browsers (e.g. VS Code's built-in browser) return file handles but refuse to read them.
+let fsAccessBlocked = false;
+
+async function readHandleFile(h) {
+  try { return await h.getFile(); }
+  catch (e) {
+    if (e?.name !== "NotAllowedError" || !h.requestPermission) throw e;
+    if ((await h.requestPermission({ mode: "read" }).catch(() => "denied")) !== "granted") throw e;
+    return h.getFile();
+  }
+}
+
+// Order: the uploaded file (re-read if the browser allows), then the copy kept for this tab.
 async function acquire() {
-  if (state.source?.handle) {
-    const h = state.source.handle;
-    try {
-      if (h.queryPermission && (await h.queryPermission({ mode: "read" })) !== "granted") await h.requestPermission({ mode: "read" });
-      const f = await h.getFile();
-      return { buf: await f.arrayBuffer(), name: f.name, modified: new Date(f.lastModified) };
-    } catch {
-      state.source = null;
-      throw new WbError("The browser no longer allows reading the selected workbook. Click \"Select workbook…\" and choose it again.", { pick: true });
+  const src = state.source;
+  state.notice = null;
+  let problem = null;
+  if (src?.handle && !fsAccessBlocked) {
+    try { return { ...(await fileResult(await readHandleFile(src.handle))), fresh: true }; }
+    catch (e) {
+      if (e?.name === "NotFoundError") problem = `"${src.handle.name}" was renamed, moved or deleted.`;
+      else { fsAccessBlocked = true; problem = `The browser did not allow re-reading "${src.handle.name}".`; }
     }
   }
-  if (state.source?.file) {
-    const f = state.source.file;
-    try { return { buf: await f.arrayBuffer(), name: f.name, modified: new Date(f.lastModified) }; }
-    catch { state.source = null; throw new WbError("The selected workbook changed on disk. Select it again to load the latest version.", { pick: true }); }
+  if (src?.file) {
+    try { return { ...(await fileResult(src.file)), fresh: true }; }
+    catch { problem = `"${src.file.name}" changed or moved after it was uploaded.`; }
   }
-  if (location.protocol === "file:") {
-    throw new WbError("This page was opened directly from disk, so the browser does not allow it to read the workbook automatically. Click \"Select workbook…\" and choose the file.", { pick: true });
+  const saved = sessionLoad();
+  if (!saved) {
+    state.source = null;
+    if (problem) throw new WbError(`${problem} Upload the workbook again.`, { pick: true });
+    return null;
   }
-  let res;
-  try { res = await fetch(workbookUrl(), { cache: "no-store" }); }
-  catch { throw new WbError("The workbook could not be requested. Check that the local web server is still running.", { pick: true }); }
-  if (res.status === 404) throw new WbError("Workbook not found next to this page.", { pick: true, detail: `Looked for: ${decodeURIComponent(new URL(workbookUrl()).pathname)}` });
-  if (!res.ok) throw new WbError(`The workbook could not be read (HTTP ${res.status}). It may be locked while being saved — try Refresh data again.`, { pick: true });
-  const lm = res.headers.get("Last-Modified");
-  return { buf: await res.arrayBuffer(), name: decodeURIComponent(new URL(res.url).pathname.split("/").pop()), modified: lm ? new Date(lm) : null };
+  state.source = { handle: src?.handle || null };
+  if (problem) state.notice = { text: `${problem} Showing the copy uploaded earlier in this tab — upload the workbook again to update it.` };
+  return saved;
 }
 
 async function load() {
@@ -715,16 +773,28 @@ async function load() {
   setBusy(true);
   announce("Reading workbook…");
   try {
-    const { buf, name, modified } = await acquire();
+    const got = await acquire();
+    if (!got) {
+      $("errorBox").hidden = true;
+      showWelcome();
+      announce("Upload a workbook to start.");
+      return;
+    }
+    const { buf, name, modified } = got;
     const wb = await readWorkbook(buf);
     for (const s of [CONFIG.mainSheet, CONFIG.employeeSheet]) {
       if (!wb.names.includes(s)) throw new WbError(`Worksheet "${s}" was not found in the workbook.`, { detail: `Available worksheets: ${wb.names.join(", ") || "none"}` });
     }
     const model = buildModel(await wb.sheet(CONFIG.mainSheet), await wb.sheet(CONFIG.employeeSheet), await wb.sheet(CONFIG.trainingListSheet));
+    if (got.fresh && !sessionSave(name, modified, buf)) {
+      state.notice = { text: `"${name}" is too large to keep for this tab, so reloading the page will ask for it again.` };
+    }
     state.model = model;
     state.meta = { name, modified, refreshed: new Date() };
     if (state.year !== ALL && !model.years.includes(state.year)) state.year = ALL;
     $("errorBox").hidden = true;
+    $("welcome").hidden = true;
+    renderNotice();
     $("content").hidden = false;
     renderYearSelect();
     renderDataQuality();
@@ -764,21 +834,61 @@ function showError(e) {
     el("h2", { text: "Unable to load workbook" }),
     el("p", { text: msg }),
     e.detail ? el("p", { text: e.detail }) : null,
-    el("p", {}, "Expected workbook (BACKEND_WORKBOOK_PATH): ", el("code", { text: BACKEND_WORKBOOK_PATH })),
-    e.pick ? el("p", { class: "hint", text: "Tip: to load it automatically, place this page in the workbook folder, run \"python -m http.server 8000\" there and open http://127.0.0.1:8000/index_v.1.0.html." }) : null,
   ].filter(Boolean));
   box.hidden = false;
+  showWelcome();
+}
+
+function showWelcome() {
+  closeParticipants();
+  state.model = null;
+  state.meta = null;
+  $("content").hidden = true;
+  $("welcome").hidden = false;
+  renderNotice();
   renderMeta();
 }
 
+function renderNotice() {
+  const n = state.notice, box = $("noticeBox");
+  box.hidden = !n;
+  if (n) box.textContent = n.text;
+}
+
+function setupWelcome() {
+  const code = t => el("code", { text: t });
+  const req = CONFIG.requiredHeaders.map(k => CONFIG.headers[k]);
+  $("formatList").replaceChildren(
+    el("li", {}, "File type: ", code(".xlsx"), " (Excel Workbook). Any file name or folder."),
+    el("li", {}, "Worksheet ", code(CONFIG.mainSheet), `: headers in row ${CONFIG.headerRow} including `, req.flatMap((h, i) => [i ? ", " : "", code(h)]),
+      `; employee names from column ${CONFIG.firstEmployeeColumn}; records from row ${CONFIG.firstDataRow}.`),
+    el("li", {}, "Worksheet ", code(CONFIG.employeeSheet), `: team names in row ${CONFIG.employeeRow} from column ${CONFIG.employeeFirstColumn}.`),
+    el("li", {}, "Worksheet ", code(CONFIG.trainingListSheet), ` (optional): training list in column ${CONFIG.trainingListColumn} from row ${CONFIG.trainingListFirstRow}.`),
+    el("li", {}, "Learning hours must be numbers ≥ 0; blank cells count as 0."),
+  );
+}
+
 async function pickWorkbook() {
-  if (window.showOpenFilePicker) {
-    try {
-      const [handle] = await window.showOpenFilePicker({ types: [{ description: "Excel workbook", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }] });
-      state.source = { handle };
-      load();
-    } catch (e) { if (e.name !== "AbortError") showError(e); }
-  } else $("fileInput").click();
+  if (!window.showOpenFilePicker || fsAccessBlocked) { $("fileInput").click(); return; }
+  let handle;
+  try {
+    [handle] = await window.showOpenFilePicker({ types: [{ description: "Excel workbook", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }] });
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    fsAccessBlocked = true;
+    $("fileInput").click();
+    return;
+  }
+  if (!isWorkbookName(handle.name)) { showError(new WbError(`"${handle.name}" is not an .xlsx workbook.`, { pick: true })); return; }
+  try {
+    state.source = { handle, file: await handle.getFile() };
+  } catch {
+    fsAccessBlocked = true;
+    showError(new WbError(`This browser blocked direct access to "${handle.name}". Click "Upload workbook…" once more to choose it with the standard file chooser.`, { pick: true }));
+    $("fileInput").click();
+    return;
+  }
+  load();
 }
 
 /* ---------- Tooltip ---------- */
@@ -1415,10 +1525,36 @@ $("drawerCopy").addEventListener("click", async () => {
 /* ---------- Events ---------- */
 $("refreshBtn").addEventListener("click", load);
 $("pickBtn").addEventListener("click", pickWorkbook);
+$("welcomePick").addEventListener("click", pickWorkbook);
 $("fileInput").addEventListener("change", e => {
   const f = e.target.files[0];
-  if (f) { state.source = { file: f }; load(); }
   e.target.value = "";
+  if (!f) return;
+  if (!isWorkbookName(f.name)) { showError(new WbError(`"${f.name}" is not an .xlsx workbook. Save it from Excel as "Excel Workbook (*.xlsx)".`, { pick: true })); return; }
+  state.source = { file: f };
+  load();
+});
+addEventListener("dragover", e => {
+  if (!e.dataTransfer?.types.includes("Files")) return;
+  e.preventDefault();
+  document.body.classList.add("dropping");
+});
+addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("dropping"); });
+addEventListener("drop", async e => {
+  e.preventDefault();
+  document.body.classList.remove("dropping");
+  const item = [...(e.dataTransfer?.items || [])].find(i => i.kind === "file");
+  if (!item || state.busy) return;
+  // Both must be requested synchronously inside the drop event.
+  const file = item.getAsFile();
+  const handlePromise = item.getAsFileSystemHandle ? item.getAsFileSystemHandle().catch(() => null) : Promise.resolve(null);
+  if (!file || !isWorkbookName(file.name)) { showError(new WbError(`"${file?.name || "This item"}" is not an .xlsx workbook.`, { pick: true })); return; }
+  const handle = await handlePromise;
+  state.source = { file };
+  if (handle?.kind === "file" && !fsAccessBlocked) {
+    try { await handle.getFile(); state.source = { handle, file }; } catch { fsAccessBlocked = true; }
+  }
+  load();
 });
 $("yearSel").addEventListener("change", e => setYear(e.target.value));
 $("addBtn").addEventListener("click", () => {
@@ -1436,6 +1572,9 @@ $("tlSearch").addEventListener("input", e => {
 document.addEventListener("click", e => { if (e.target.closest?.(".info")) e.preventDefault(); });
 
 applyHelp();
+setupWelcome();
+// Remove any workbook persisted by an earlier version of this page.
+window.indexedDB?.deleteDatabase("transaxle-ld-dashboard");
 renderMeta();
 load();
 </script>
